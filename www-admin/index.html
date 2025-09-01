@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deno Micro CMS Admin</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 1rem;
+      max-width: 700px;
+    }
+
+    button {
+      margin: 0.3rem 0.6rem 0.3rem 0;
+    }
+
+    textarea {
+      width: 100%;
+      height: 200px;
+      font-family: monospace;
+    }
+
+    input[type="text"],
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.3rem;
+      margin: 0.3rem 0 1rem 0;
+    }
+
+    label {
+      display: block;
+      margin-top: 1rem;
+    }
+
+    #status {
+      margin-top: 1rem;
+      min-height: 1.5em;
+      color: green;
+    }
+
+    #status.error {
+      color: red;
+    }
+
+    a {
+      color: blue;
+    }
+
+    nav {
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Deno Micro CMS Admin</h1>
+
+  <div id="auth-section">
+    <div id="login-form">
+      <label>
+        Passcode:
+        <input type="password" id="passcode-input" />
+      </label>
+      <button id="sign-in-btn">Sign In</button>
+    </div>
+    <div id="auth-info" style="display:none;">
+      <button id="sign-out-btn">Sign Out</button>
+    </div>
+  </div>
+
+  <div id="dashboard" style="display:none;">
+    <nav>
+      <button id="new-blob-btn">+ New Blob</button>
+      <button id="refresh-list-btn">Refresh List</button>
+    </nav>
+
+    <!-- List Page -->
+    <div id="list-page">
+      <h2>Blob Keys</h2>
+      <ul id="blob-list"></ul>
+    </div>
+
+    <!-- Detail Page -->
+    <div id="detail-page" style="display:none;">
+      <button id="back-to-list-btn">← Back to list</button>
+      <h2 id="detail-title">Blob Detail</h2>
+
+      <label>
+        Key:
+        <input type="text" id="blob-key" />
+      </label>
+
+      <label>
+        MIME Type:
+        <input type="text" id="blob-mime" placeholder="e.g. text/plain or image/png" />
+      </label>
+
+      <label>
+        Content Type:
+        <select id="content-type-select">
+          <option value="text">Text</option>
+          <option value="file">File</option>
+        </select>
+      </label>
+
+      <div id="text-content-container">
+        <label>
+          Content:
+          <textarea id="blob-content"></textarea>
+        </label>
+      </div>
+
+      <div id="file-content-container" style="display:none;">
+        <label>
+          Upload file:
+          <input type="file" id="blob-file" />
+        </label>
+        <div id="existing-file-link" style="margin-top: 0.5rem;"></div>
+      </div>
+
+      <div style="margin-top:1rem;">
+        <button id="create-btn">Create</button>
+        <button id="update-btn">Update</button>
+        <button id="delete-btn" style="color:red;">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <script>
+    (() => {
+      const apiBase = '/api';
+
+      // Auth elements
+      const authSection = document.getElementById('auth-section');
+      const loginForm = document.getElementById('login-form');
+      const passcodeInput = document.getElementById('passcode-input');
+      const signInBtn = document.getElementById('sign-in-btn');
+      const authInfo = document.getElementById('auth-info');
+      const signOutBtn = document.getElementById('sign-out-btn');
+
+      // Dashboard elements
+      const dashboard = document.getElementById('dashboard');
+      const newBlobBtn = document.getElementById('new-blob-btn');
+      const refreshListBtn = document.getElementById('refresh-list-btn');
+
+      // List page elements
+      const listPage = document.getElementById('list-page');
+      const blobList = document.getElementById('blob-list');
+
+      // Detail page elements
+      const detailPage = document.getElementById('detail-page');
+      const backToListBtn = document.getElementById('back-to-list-btn');
+      const detailTitle = document.getElementById('detail-title');
+      const blobKeyInput = document.getElementById('blob-key');
+      const blobMimeInput = document.getElementById('blob-mime');
+      const contentTypeSelect = document.getElementById('content-type-select');
+      const textContentContainer = document.getElementById('text-content-container');
+      const fileContentContainer = document.getElementById('file-content-container');
+      const blobContentInput = document.getElementById('blob-content');
+      const blobFileInput = document.getElementById('blob-file');
+      const existingFileLink = document.getElementById('existing-file-link');
+
+      const createBtn = document.getElementById('create-btn');
+      const updateBtn = document.getElementById('update-btn');
+      const deleteBtn = document.getElementById('delete-btn');
+
+      // Status element
+      const statusElem = document.getElementById('status');
+
+      let editingKey = null;
+
+      // Helper: Show status messages
+      function setStatus(msg, isError = false) {
+        statusElem.textContent = msg;
+        statusElem.className = isError ? 'error' : '';
+      }
+
+      // Clear status
+      function clearStatus() {
+        setStatus('');
+      }
+
+      // Show/hide pages
+      function showListPage() {
+        detailPage.style.display = 'none';
+        listPage.style.display = 'block';
+        clearStatus();
+        loadBlobList();
+      }
+
+      function showDetailPage(isNew = false) {
+        listPage.style.display = 'none';
+        detailPage.style.display = 'block';
+        clearStatus();
+        if (isNew) {
+          detailTitle.textContent = 'Create New Blob';
+          blobKeyInput.value = '';
+          blobKeyInput.disabled = false;
+          blobMimeInput.value = 'text/plain';
+          contentTypeSelect.value = 'text';
+          contentTypeSelect.dispatchEvent(new Event('change'));
+          blobContentInput.value = '';
+          blobFileInput.value = '';
+          existingFileLink.innerHTML = '';
+          createBtn.style.display = '';
+          updateBtn.style.display = 'none';
+          deleteBtn.style.display = 'none';
+          editingKey = null;
+        } else {
+          detailTitle.textContent = 'Edit Blob';
+          blobKeyInput.disabled = true;
+          createBtn.style.display = 'none';
+          updateBtn.style.display = '';
+          deleteBtn.style.display = '';
+        }
+      }
+
+      // Content type selector toggle
+      contentTypeSelect.addEventListener('change', () => {
+        if (contentTypeSelect.value === 'text') {
+          textContentContainer.style.display = 'block';
+          fileContentContainer.style.display = 'none';
+        } else {
+          textContentContainer.style.display = 'none';
+          fileContentContainer.style.display = 'block';
+        }
+      });
+
+      // Authentication check
+      async function checkAuth() {
+        try {
+          const res = await fetch(apiBase + '/auth', { credentials: 'include' });
+          if (res.status === 200) {
+            // logged in
+            loginForm.style.display = 'none';
+            authInfo.style.display = 'block';
+            dashboard.style.display = 'block';
+            showListPage();
+          } else {
+            // not logged in
+            loginForm.style.display = 'block';
+            authInfo.style.display = 'none';
+            dashboard.style.display = 'none';
+          }
+        } catch {
+          setStatus('Network error checking authentication', true);
+        }
+      }
+
+      // Sign in
+      signInBtn.addEventListener('click', async () => {
+        const passcode = passcodeInput.value.trim();
+        if (!passcode) {
+          setStatus('Passcode cannot be empty', true);
+          return;
+        }
+        setStatus('Signing in...');
+        try {
+          const res = await fetch(apiBase + '/auth/sign-in', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ passcode })
+          });
+          if (res.status === 200) {
+            setStatus('Signed in');
+            passcodeInput.value = '';
+            checkAuth();
+          } else {
+            setStatus('Failed to sign in', true);
+          }
+        } catch {
+          setStatus('Network error during sign in', true);
+        }
+      });
+
+      // Sign out
+      signOutBtn.addEventListener('click', async () => {
+        setStatus('Signing out...');
+        try {
+          const res = await fetch(apiBase + '/auth/sign-out', {
+            method: 'POST',
+            credentials: 'include'
+          });
+          if (res.status === 200) {
+            setStatus('Signed out');
+            checkAuth();
+          } else {
+            setStatus('Failed to sign out', true);
+          }
+        } catch {
+          setStatus('Network error during sign out', true);
+        }
+      });
+
+      // Load list of blobs
+      async function loadBlobList() {
+        blobList.innerHTML = '';
+        setStatus('Loading blobs...');
+        try {
+          const res = await fetch(apiBase + '/blob', { credentials: 'include' });
+          if (!res.ok) throw new Error('Failed to load blob list');
+          const blobs = await res.json();
+          if (!Array.isArray(blobs)) throw new Error('Invalid blob list format');
+          if (blobs.length === 0) {
+            blobList.innerHTML = '<li><em>No blobs found.</em></li>';
+          } else {
+            for (const key of blobs) {
+              const li = document.createElement('li');
+              const btn = document.createElement('button');
+              btn.textContent = key;
+              btn.style.cursor = 'pointer';
+              btn.addEventListener('click', () => loadBlobDetail(key));
+              li.appendChild(btn);
+              blobList.appendChild(li);
+            }
+          }
+          setStatus('');
+        } catch (e) {
+          setStatus(e.message, true);
+        }
+      }
+
+      // Load blob detail for editing
+      async function loadBlobDetail(key) {
+        editingKey = key;
+        showDetailPage(false);
+        blobKeyInput.value = key;
+        setStatus('Loading blob "' + key + '"...');
+        try {
+          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(key), { credentials: 'include' });
+          if (!res.ok) throw new Error('Blob not found');
+
+          const contentType = res.headers.get('Content-Type') || '';
+          blobMimeInput.value = contentType;
+
+          // Detect content type
+          if (contentType.startsWith('text/') || contentType === 'application/json' || contentType === 'application/javascript') {
+            contentTypeSelect.value = 'text';
+            contentTypeSelect.dispatchEvent(new Event('change'));
+            const text = await res.text();
+            blobContentInput.value = text;
+            existingFileLink.innerHTML = '';
+          } else {
+            contentTypeSelect.value = 'file';
+            contentTypeSelect.dispatchEvent(new Event('change'));
+            existingFileLink.innerHTML = `<a href="${apiBase}/blob/${encodeURIComponent(key)}" target="_blank" download>Download current file</a>`;
+            blobContentInput.value = '';
+          }
+          blobFileInput.value = '';
+          setStatus('Loaded blob "' + key + '".');
+        } catch (e) {
+          setStatus(e.message, true);
+          showListPage();
+        }
+      }
+
+      // Create or update blob
+      async function saveBlob(isCreate) {
+        const key = blobKeyInput.value.trim();
+        const mime = blobMimeInput.value.trim() || 'application/octet-stream';
+        if (!key) {
+          setStatus('Key cannot be empty', true);
+          return;
+        }
+
+        let body;
+        if (contentTypeSelect.value === 'text') {
+          body = blobContentInput.value;
+        } else {
+          const files = blobFileInput.files;
+          if (!files || files.length === 0) {
+            setStatus('Please select a file to upload', true);
+            return;
+          }
+          body = files[0];
+        }
+
+        setStatus((isCreate ? 'Creating' : 'Updating') + ' blob...');
+        try {
+          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(key), {
+            method: isCreate ? 'POST' : 'PUT',
+            credentials: 'include',
+            headers: { 'Content-Type': mime },
+            body,
+          });
+          if (res.status === 200) {
+            setStatus(`Blob ${isCreate ? 'created' : 'updated'}`);
+            showListPage();
+          } else {
+            setStatus('Failed to ' + (isCreate ? 'create' : 'update') + ' blob', true);
+          }
+        } catch {
+          setStatus('Network error during ' + (isCreate ? 'create' : 'update'), true);
+        }
+      }
+
+      // Delete blob
+      async function deleteBlob() {
+        if (!editingKey) {
+          setStatus('No blob selected to delete', true);
+          return;
+        }
+        if (!confirm(`Delete blob "${editingKey}"?`)) return;
+
+        setStatus('Deleting blob...');
+        try {
+          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(editingKey), {
+            method: 'DELETE',
+            credentials: 'include'
+          });
+          if (res.status === 200) {
+            setStatus('Blob deleted');
+            showListPage();
+          } else {
+            setStatus('Failed to delete blob', true);
+          }
+        } catch {
+          setStatus('Network error during delete', true);
+        }
+      }
+
+      // Event listeners
+      newBlobBtn.addEventListener('click', () => showDetailPage(true));
+      refreshListBtn.addEventListener('click', loadBlobList);
+      backToListBtn.addEventListener('click', showListPage);
+      createBtn.addEventListener('click', () => saveBlob(true));
+      updateBtn.addEventListener('click', () => saveBlob(false));
+      deleteBtn.addEventListener('click', deleteBlob);
+
+      // Init
+      checkAuth();
+
+    })();
+  </script>
+</body>
+
+</html>
