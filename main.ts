@@ -1,4 +1,4 @@
-import { setupApp } from "https://git.foo-bar.top/sean/deno-micro-cms/raw/commit/d2104333665ec9e423abe473dcf4c2900eceacd4/mod.ts";
+import { setupApp } from "https://git.foo-bar.top/sean/deno-micro-cms/raw/commit/5994edefd167765fb2caef800334fe848f260892/mod.ts";
 
 const app = await setupApp({
   STATIC_ROUTES: `/admin,www-admin,index.html,index.html;,www,index.html,index.html`,
