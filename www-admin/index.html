@@ -45,12 +45,18 @@
       color: red;
     }
 
-    a {
-      color: blue;
-    }
-
     nav {
       margin-bottom: 1rem;
+    }
+
+    .link-btn {
+      color: blue;
+      background: none;
+      border: none;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+      font-size: 1em;
     }
   </style>
 </head>
@@ -58,6 +64,7 @@
 <body>
   <h1>Deno Micro CMS Admin</h1>
 
+  <!-- Auth Section -->
   <div id="auth-section">
     <div id="login-form">
       <label>
@@ -71,22 +78,40 @@
     </div>
   </div>
 
+  <!-- Dashboard -->
   <div id="dashboard" style="display:none;">
     <nav>
-      <button id="new-blob-btn">+ New Blob</button>
-      <button id="refresh-list-btn">Refresh List</button>
+      <button id="new-category-btn">+ New Category</button>
+      <button id="refresh-categories-btn">Refresh Categories</button>
     </nav>
 
-    <!-- List Page -->
-    <div id="list-page">
-      <h2>Blob Keys</h2>
+    <!-- Category List Page -->
+    <div id="category-page">
+      <h2>Categories</h2>
+      <ul id="category-list"></ul>
+    </div>
+
+    <!-- Blob List Page -->
+    <div id="list-page" style="display:none;">
+      <button id="back-to-categories-btn">← Back to Categories</button>
+      <h2 id="category-title"></h2>
+      <nav>
+        <button id="new-blob-btn">+ New Blob</button>
+        <button id="refresh-list-btn">Refresh List</button>
+        <button id="delete-category-btn" style="color:red;">Delete Category</button>
+      </nav>
       <ul id="blob-list"></ul>
     </div>
 
-    <!-- Detail Page -->
+    <!-- Blob Detail Page -->
     <div id="detail-page" style="display:none;">
-      <button id="back-to-list-btn">← Back to list</button>
+      <button id="back-to-list-btn">← Back to List</button>
       <h2 id="detail-title">Blob Detail</h2>
+
+      <label>
+        Category:
+        <input type="text" id="blob-category" />
+      </label>
 
       <label>
         Key:
@@ -136,26 +161,36 @@
       const apiBase = '/api';
 
       // Auth elements
-      const authSection = document.getElementById('auth-section');
       const loginForm = document.getElementById('login-form');
       const passcodeInput = document.getElementById('passcode-input');
       const signInBtn = document.getElementById('sign-in-btn');
       const authInfo = document.getElementById('auth-info');
       const signOutBtn = document.getElementById('sign-out-btn');
 
-      // Dashboard elements
+      // Dashboard
       const dashboard = document.getElementById('dashboard');
+      const statusElem = document.getElementById('status');
+
+      // Category
+      const categoryPage = document.getElementById('category-page');
+      const categoryList = document.getElementById('category-list');
+      const newCategoryBtn = document.getElementById('new-category-btn');
+      const refreshCategoriesBtn = document.getElementById('refresh-categories-btn');
+
+      // Blob list
+      const listPage = document.getElementById('list-page');
+      const categoryTitle = document.getElementById('category-title');
+      const blobList = document.getElementById('blob-list');
       const newBlobBtn = document.getElementById('new-blob-btn');
       const refreshListBtn = document.getElementById('refresh-list-btn');
+      const deleteCategoryBtn = document.getElementById('delete-category-btn');
+      const backToCategoriesBtn = document.getElementById('back-to-categories-btn');
 
-      // List page elements
-      const listPage = document.getElementById('list-page');
-      const blobList = document.getElementById('blob-list');
-
-      // Detail page elements
+      // Blob detail
       const detailPage = document.getElementById('detail-page');
       const backToListBtn = document.getElementById('back-to-list-btn');
       const detailTitle = document.getElementById('detail-title');
+      const blobCategoryInput = document.getElementById('blob-category');
       const blobKeyInput = document.getElementById('blob-key');
       const blobMimeInput = document.getElementById('blob-mime');
       const contentTypeSelect = document.getElementById('content-type-select');
@@ -164,46 +199,161 @@
       const blobContentInput = document.getElementById('blob-content');
       const blobFileInput = document.getElementById('blob-file');
       const existingFileLink = document.getElementById('existing-file-link');
-
       const createBtn = document.getElementById('create-btn');
       const updateBtn = document.getElementById('update-btn');
       const deleteBtn = document.getElementById('delete-btn');
 
-      // Status element
-      const statusElem = document.getElementById('status');
-
+      let currentCategory = null;
       let editingKey = null;
 
-      // Helper: Show status messages
+      // Helpers
       function setStatus(msg, isError = false) {
         statusElem.textContent = msg;
         statusElem.className = isError ? 'error' : '';
       }
 
-      // Clear status
-      function clearStatus() {
-        setStatus('');
+      function clearStatus() { setStatus(''); }
+
+      // ---- Auth ----
+      async function checkAuth() {
+        try {
+          const res = await fetch(apiBase + '/auth', { credentials: 'include' });
+          if (res.status === 200) {
+            loginForm.style.display = 'none';
+            authInfo.style.display = 'block';
+            dashboard.style.display = 'block';
+            showCategoryPage();
+          } else {
+            loginForm.style.display = 'block';
+            authInfo.style.display = 'none';
+            dashboard.style.display = 'none';
+          }
+        } catch {
+          setStatus('Network error checking authentication', true);
+        }
       }
 
-      // Show/hide pages
-      function showListPage() {
+      signInBtn.onclick = async () => {
+        const passcode = passcodeInput.value.trim();
+        if (!passcode) return setStatus('Passcode cannot be empty', true);
+        try {
+          const res = await fetch(apiBase + '/auth/sign-in', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ passcode })
+          });
+          if (res.status === 200) {
+            setStatus('Signed in');
+            checkAuth();
+          } else setStatus('Failed to sign in', true);
+        } catch {
+          setStatus('Network error during sign in', true);
+        }
+      };
+
+      signOutBtn.onclick = async () => {
+        try {
+          await fetch(apiBase + '/auth/sign-out', { method: 'POST', credentials: 'include' });
+          setStatus('Signed out');
+          checkAuth();
+        } catch {
+          setStatus('Network error during sign out', true);
+        }
+      };
+
+      // ---- Category Management ----
+      async function loadCategories() {
+        categoryList.innerHTML = '<li>Loading...</li>';
+        try {
+          const res = await fetch(apiBase + '/blob', { credentials: 'include' });
+          if (!res.ok) throw new Error('Failed to load categories');
+          const cats = await res.json();
+          categoryList.innerHTML = '';
+          if (!cats || cats.length === 0) {
+            categoryList.innerHTML = '<li><em>No categories.</em></li>';
+          } else {
+            cats.forEach(cat => {
+              const li = document.createElement('li');
+              const btn = document.createElement('button');
+              btn.className = 'link-btn';
+              btn.textContent = cat;
+              btn.onclick = () => showBlobList(cat);
+              li.appendChild(btn);
+              categoryList.appendChild(li);
+            });
+          }
+          clearStatus();
+        } catch (e) {
+          setStatus(e.message, true);
+        }
+      }
+
+      async function createCategory() {
+        const name = prompt('Enter new category name:');
+        if (!name) return;
+        try {
+          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(name), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+          if (res.ok) {
+            setStatus('Category created');
+            loadCategories();
+          } else setStatus('Failed to create category', true);
+        } catch {
+          setStatus('Network error creating category', true);
+        }
+      }
+
+      async function deleteCategory() {
+        if (!currentCategory) return;
+        if (!confirm(`Delete category "${currentCategory}" and all blobs?`)) return;
+        try {
+          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(currentCategory), {
+            method: 'DELETE',
+            credentials: 'include'
+          });
+          if (res.ok) {
+            setStatus('Category deleted');
+            showCategoryPage();
+          } else setStatus('Failed to delete category', true);
+        } catch {
+          setStatus('Network error deleting category', true);
+        }
+      }
+
+      // ---- Page switches ----
+      function showCategoryPage() {
+        categoryPage.style.display = 'block';
+        listPage.style.display = 'none';
         detailPage.style.display = 'none';
+        loadCategories();
+      }
+
+      function showBlobList(category) {
+        currentCategory = category;
+        categoryTitle.textContent = `Category: ${category}`;
+        categoryPage.style.display = 'none';
         listPage.style.display = 'block';
-        clearStatus();
+        detailPage.style.display = 'none';
         loadBlobList();
       }
 
       function showDetailPage(isNew = false) {
+        categoryPage.style.display = 'none';
         listPage.style.display = 'none';
         detailPage.style.display = 'block';
-        clearStatus();
+        blobCategoryInput.value = currentCategory;
+        blobCategoryInput.disabled = true;
         if (isNew) {
           detailTitle.textContent = 'Create New Blob';
           blobKeyInput.value = '';
           blobKeyInput.disabled = false;
           blobMimeInput.value = 'text/plain';
           contentTypeSelect.value = 'text';
-          contentTypeSelect.dispatchEvent(new Event('change'));
           blobContentInput.value = '';
           blobFileInput.value = '';
           existingFileLink.innerHTML = '';
@@ -220,224 +370,125 @@
         }
       }
 
-      // Content type selector toggle
-      contentTypeSelect.addEventListener('change', () => {
-        if (contentTypeSelect.value === 'text') {
-          textContentContainer.style.display = 'block';
-          fileContentContainer.style.display = 'none';
-        } else {
-          textContentContainer.style.display = 'none';
-          fileContentContainer.style.display = 'block';
-        }
-      });
-
-      // Authentication check
-      async function checkAuth() {
-        try {
-          const res = await fetch(apiBase + '/auth', { credentials: 'include' });
-          if (res.status === 200) {
-            // logged in
-            loginForm.style.display = 'none';
-            authInfo.style.display = 'block';
-            dashboard.style.display = 'block';
-            showListPage();
-          } else {
-            // not logged in
-            loginForm.style.display = 'block';
-            authInfo.style.display = 'none';
-            dashboard.style.display = 'none';
-          }
-        } catch {
-          setStatus('Network error checking authentication', true);
-        }
-      }
-
-      // Sign in
-      signInBtn.addEventListener('click', async () => {
-        const passcode = passcodeInput.value.trim();
-        if (!passcode) {
-          setStatus('Passcode cannot be empty', true);
-          return;
-        }
-        setStatus('Signing in...');
-        try {
-          const res = await fetch(apiBase + '/auth/sign-in', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ passcode })
-          });
-          if (res.status === 200) {
-            setStatus('Signed in');
-            passcodeInput.value = '';
-            checkAuth();
-          } else {
-            setStatus('Failed to sign in', true);
-          }
-        } catch {
-          setStatus('Network error during sign in', true);
-        }
-      });
-
-      // Sign out
-      signOutBtn.addEventListener('click', async () => {
-        setStatus('Signing out...');
-        try {
-          const res = await fetch(apiBase + '/auth/sign-out', {
-            method: 'POST',
-            credentials: 'include'
-          });
-          if (res.status === 200) {
-            setStatus('Signed out');
-            checkAuth();
-          } else {
-            setStatus('Failed to sign out', true);
-          }
-        } catch {
-          setStatus('Network error during sign out', true);
-        }
-      });
-
-      // Load list of blobs
+      // ---- Blobs ----
       async function loadBlobList() {
-        blobList.innerHTML = '';
-        setStatus('Loading blobs...');
+        blobList.innerHTML = '<li>Loading...</li>';
         try {
-          const res = await fetch(apiBase + '/blob', { credentials: 'include' });
+          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(currentCategory), { credentials: 'include' });
           if (!res.ok) throw new Error('Failed to load blob list');
           const blobs = await res.json();
-          if (!Array.isArray(blobs)) throw new Error('Invalid blob list format');
-          if (blobs.length === 0) {
-            blobList.innerHTML = '<li><em>No blobs found.</em></li>';
-          } else {
-            for (const key of blobs) {
+          blobList.innerHTML = '';
+          if (blobs.length === 0) blobList.innerHTML = '<li><em>No blobs found.</em></li>';
+          else {
+            blobs.forEach(key => {
               const li = document.createElement('li');
               const btn = document.createElement('button');
+              btn.className = 'link-btn';
               btn.textContent = key;
-              btn.style.cursor = 'pointer';
-              btn.addEventListener('click', () => loadBlobDetail(key));
+              btn.onclick = () => loadBlobDetail(key);
               li.appendChild(btn);
               blobList.appendChild(li);
-            }
+            });
           }
-          setStatus('');
         } catch (e) {
           setStatus(e.message, true);
         }
       }
 
-      // Load blob detail for editing
       async function loadBlobDetail(key) {
         editingKey = key;
         showDetailPage(false);
         blobKeyInput.value = key;
-        setStatus('Loading blob "' + key + '"...');
         try {
-          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(key), { credentials: 'include' });
+          const res = await fetch(`${apiBase}/blob/${encodeURIComponent(currentCategory)}/${encodeURIComponent(key)}`, { credentials: 'include' });
           if (!res.ok) throw new Error('Blob not found');
-
-          const contentType = res.headers.get('Content-Type') || '';
-          blobMimeInput.value = contentType;
-
-          // Detect content type
-          if (contentType.startsWith('text/') || contentType === 'application/json' || contentType === 'application/javascript') {
+          const mime = res.headers.get('Content-Type') || '';
+          blobMimeInput.value = mime;
+          if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/javascript') {
             contentTypeSelect.value = 'text';
-            contentTypeSelect.dispatchEvent(new Event('change'));
-            const text = await res.text();
-            blobContentInput.value = text;
+            blobContentInput.value = await res.text();
             existingFileLink.innerHTML = '';
           } else {
             contentTypeSelect.value = 'file';
-            contentTypeSelect.dispatchEvent(new Event('change'));
-            existingFileLink.innerHTML = `<a href="${apiBase}/blob/${encodeURIComponent(key)}" target="_blank" download>Download current file</a>`;
-            blobContentInput.value = '';
+            existingFileLink.innerHTML = `<a href="${apiBase}/blob/${encodeURIComponent(currentCategory)}/${encodeURIComponent(key)}" target="_blank" download>Download current file</a>`;
           }
           blobFileInput.value = '';
-          setStatus('Loaded blob "' + key + '".');
+          clearStatus();
         } catch (e) {
           setStatus(e.message, true);
-          showListPage();
+          showBlobList(currentCategory);
         }
       }
 
-      // Create or update blob
       async function saveBlob(isCreate) {
         const key = blobKeyInput.value.trim();
         const mime = blobMimeInput.value.trim() || 'application/octet-stream';
-        if (!key) {
-          setStatus('Key cannot be empty', true);
-          return;
-        }
+        if (!key) return setStatus('Key cannot be empty', true);
 
         let body;
-        if (contentTypeSelect.value === 'text') {
-          body = blobContentInput.value;
-        } else {
-          const files = blobFileInput.files;
-          if (!files || files.length === 0) {
-            setStatus('Please select a file to upload', true);
-            return;
-          }
-          body = files[0];
+        if (contentTypeSelect.value === 'text') body = blobContentInput.value;
+        else {
+          const file = blobFileInput.files[0];
+          if (!file) return setStatus('Select a file first', true);
+          body = file;
         }
 
-        setStatus((isCreate ? 'Creating' : 'Updating') + ' blob...');
         try {
-          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(key), {
+          const res = await fetch(`${apiBase}/blob/${encodeURIComponent(currentCategory)}/${encodeURIComponent(key)}`, {
             method: isCreate ? 'POST' : 'PUT',
             credentials: 'include',
             headers: { 'Content-Type': mime },
-            body,
+            body
           });
-          if (res.status === 200) {
+          if (res.ok) {
             setStatus(`Blob ${isCreate ? 'created' : 'updated'}`);
-            showListPage();
+            showBlobList(currentCategory);
           } else {
-            setStatus('Failed to ' + (isCreate ? 'create' : 'update') + ' blob', true);
+            setStatus(`Failed to ${isCreate ? 'create' : 'update'} blob`, true);
           }
         } catch {
-          setStatus('Network error during ' + (isCreate ? 'create' : 'update'), true);
+          setStatus('Network error saving blob', true);
         }
       }
 
-      // Delete blob
       async function deleteBlob() {
-        if (!editingKey) {
-          setStatus('No blob selected to delete', true);
-          return;
-        }
+        if (!editingKey) return;
         if (!confirm(`Delete blob "${editingKey}"?`)) return;
-
-        setStatus('Deleting blob...');
         try {
-          const res = await fetch(apiBase + '/blob/' + encodeURIComponent(editingKey), {
-            method: 'DELETE',
-            credentials: 'include'
+          const res = await fetch(`${apiBase}/blob/${encodeURIComponent(currentCategory)}/${encodeURIComponent(editingKey)}`, {
+            method: 'DELETE', credentials: 'include'
           });
-          if (res.status === 200) {
+          if (res.ok) {
             setStatus('Blob deleted');
-            showListPage();
-          } else {
-            setStatus('Failed to delete blob', true);
-          }
+            showBlobList(currentCategory);
+          } else setStatus('Failed to delete blob', true);
         } catch {
-          setStatus('Network error during delete', true);
+          setStatus('Network error deleting blob', true);
         }
       }
 
-      // Event listeners
-      newBlobBtn.addEventListener('click', () => showDetailPage(true));
-      refreshListBtn.addEventListener('click', loadBlobList);
-      backToListBtn.addEventListener('click', showListPage);
-      createBtn.addEventListener('click', () => saveBlob(true));
-      updateBtn.addEventListener('click', () => saveBlob(false));
-      deleteBtn.addEventListener('click', deleteBlob);
+      // ---- Event bindings ----
+      contentTypeSelect.onchange = () => {
+        const isText = contentTypeSelect.value === 'text';
+        textContentContainer.style.display = isText ? 'block' : 'none';
+        fileContentContainer.style.display = isText ? 'none' : 'block';
+      };
+
+      newCategoryBtn.onclick = createCategory;
+      refreshCategoriesBtn.onclick = loadCategories;
+      deleteCategoryBtn.onclick = deleteCategory;
+      backToCategoriesBtn.onclick = showCategoryPage;
+
+      newBlobBtn.onclick = () => showDetailPage(true);
+      refreshListBtn.onclick = loadBlobList;
+      backToListBtn.onclick = () => showBlobList(currentCategory);
+      createBtn.onclick = () => saveBlob(true);
+      updateBtn.onclick = () => saveBlob(false);
+      deleteBtn.onclick = deleteBlob;
 
       // Init
       checkAuth();
-
     })();
   </script>
 </body>
-
 </html>
